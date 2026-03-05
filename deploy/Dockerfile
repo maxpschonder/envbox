@@ -2,7 +2,7 @@
 FROM ubuntu:jammy
 
 ARG TARGETARCH
-# This should be updated in the Makefile whenever the version is changed. 
+# This should be updated in the Makefile whenever the version is changed.
 # We don't hardcode it here because we have to be able to build both
 # amd and arm
 ARG SYSBOX_SHA
@@ -20,9 +20,9 @@ LABEL \
 
 # Basic utilities
 ARG DEBIAN_FRONTEND=noninteractive
-# Pin docker to avoid any breaking API changes between the Go client and 
-# the server.
-ARG DOCKER_VERSION="5:27.3.1-1~ubuntu.22.04~jammy"
+# Pin docker to avoid any breaking API changes between the Go client and
+# the server. 28.1.1 aligns with github.com/docker/docker v28.1.1 client.
+ARG DOCKER_VERSION="5:28.1.1-1~ubuntu.22.04~jammy"
 #   Ignore other repositories, as some require HTTPS
 RUN apt-get update --quiet --option Dir::Etc::SourceParts="" && \
     apt-get upgrade -y && \
