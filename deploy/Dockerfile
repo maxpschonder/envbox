@@ -21,8 +21,8 @@ LABEL \
 # Basic utilities
 ARG DEBIAN_FRONTEND=noninteractive
 # Pin docker to avoid any breaking API changes between the Go client and
-# the server. 28.1.1 aligns with github.com/docker/docker v28.1.1 client.
-ARG DOCKER_VERSION="5:28.1.1-1~ubuntu.22.04~jammy"
+# the server. Use latest LTS/stable from https://download.docker.com/linux/ubuntu/dists/jammy/pool/stable/
+ARG DOCKER_VERSION="5:29.2.1-1~ubuntu.22.04~jammy"
 #   Ignore other repositories, as some require HTTPS
 RUN apt-get update --quiet --option Dir::Etc::SourceParts="" && \
     apt-get upgrade -y && \

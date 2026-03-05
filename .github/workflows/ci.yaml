@@ -195,7 +195,7 @@ jobs:
         run: exit 0
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           image-ref: envbox:latest
           format: sarif
