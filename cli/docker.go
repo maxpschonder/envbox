@@ -483,7 +483,8 @@ func runDockerCVM(ctx context.Context, log slog.Logger, client dockerutil.Client
 	envs := defaultContainerEnvs(ctx, flags.agentToken)
 
 	innerEnvsTokens := strings.Split(flags.innerEnvs, ",")
-	envs = append(envs, filterElements(xunix.Environ(ctx), innerEnvsTokens...)...)
+	forwardedEnvs := filterElements(xunix.Environ(ctx), innerEnvsTokens...)
+	envs = append(envs, forwardedEnvs...)
 
 	mounts := defaultMounts()
 	// Add any user-specified mounts to our mounts list.
@@ -756,6 +757,16 @@ func runDockerCVM(ctx context.Context, log slog.Logger, client dockerutil.Client
 		return "", xerrors.Errorf("start container: %w", err)
 	}
 
+	// When the inner container uses systemd, forward CODER_INNER_ENVS to the
+	// docker.service unit so the inner Docker daemon (e.g. for docker pull/build)
+	// sees the same env (e.g. HTTP_PROXY). On failure log and continue.
+	if imgMeta.HasInit && len(forwardedEnvs) > 0 {
+		if err := injectInnerDockerEnvs(ctx, client, containerID, log, forwardedEnvs); err != nil {
+			log.Warn(ctx, "could not inject env into inner docker daemon (docker.service); inner dockerd may not see forwarded env",
+				slog.F("error", err))
+		}
+	}
+
 	log.Debug(ctx, "creating bootstrap directory", slog.F("directory", imgMeta.HomeDir))
 
 	// Create the directory to which we will download the agent.
@@ -907,6 +918,74 @@ func filterElements(ss []string, filters ...string) []string {
 	}
 
 	return filtered
+}
+
+// buildSystemdEnvDropIn builds the contents of a systemd [Service] drop-in
+// that sets Environment= for each KEY=value in envs. Values are escaped for
+// systemd (e.g. % → %%, " → \", \ → \\).
+func buildSystemdEnvDropIn(envs []string) string {
+	var b strings.Builder
+	b.WriteString("[Service]\n")
+	for _, e := range envs {
+		toks := strings.SplitN(e, "=", 2)
+		if len(toks) != 2 {
+			continue
+		}
+		key, val := toks[0], toks[1]
+		// Escape for systemd Environment= double-quoted value: % → %%, \ → \\, " → \"
+		val = strings.ReplaceAll(val, `%`, `%%`)
+		val = strings.ReplaceAll(val, `\`, `\\`)
+		val = strings.ReplaceAll(val, `"`, `\"`)
+		b.WriteString(fmt.Sprintf(`Environment="%s=%s"`+"\n", key, val))
+	}
+	return b.String()
+}
+
+// injectInnerDockerEnvs writes a systemd drop-in so the inner container's
+// docker.service gets the same env vars as forwardedEnvs, then reloads and
+// restarts docker. Runs as root inside the container. On failure logs a
+// warning and returns an error; callers should not fail workspace startup.
+func injectInnerDockerEnvs(ctx context.Context, client dockerutil.Client, containerID string, log slog.Logger, forwardedEnvs []string) error {
+	if len(forwardedEnvs) == 0 {
+		return nil
+	}
+	dropIn := buildSystemdEnvDropIn(forwardedEnvs)
+	dropInDir := "/etc/systemd/system/docker.service.d"
+	dropInPath := dropInDir + "/envbox-env.conf"
+
+	// Create directory and write drop-in via stdin to avoid shell escaping.
+	_, err := dockerutil.ExecContainer(ctx, client, dockerutil.ExecConfig{
+		ContainerID: containerID,
+		User:        "0",
+		Cmd:         "sh",
+		Args:        []string{"-c", "mkdir -p " + dropInDir + " && cat > " + dropInPath},
+		Stdin:       strings.NewReader(dropIn),
+	})
+	if err != nil {
+		return xerrors.Errorf("write docker.service.d drop-in: %w", err)
+	}
+
+	_, err = dockerutil.ExecContainer(ctx, client, dockerutil.ExecConfig{
+		ContainerID: containerID,
+		User:        "0",
+		Cmd:         "systemctl",
+		Args:        []string{"daemon-reload"},
+	})
+	if err != nil {
+		return xerrors.Errorf("systemctl daemon-reload: %w", err)
+	}
+
+	_, err = dockerutil.ExecContainer(ctx, client, dockerutil.ExecConfig{
+		ContainerID: containerID,
+		User:        "0",
+		Cmd:         "systemctl",
+		Args:        []string{"restart", "docker"},
+	})
+	if err != nil {
+		return xerrors.Errorf("systemctl restart docker: %w", err)
+	}
+
+	return nil
 }
 
 // parseMounts parses a list of mounts from containerMounts. The format should
